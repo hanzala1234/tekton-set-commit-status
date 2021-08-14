@@ -1,0 +1,10 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: set-commit-status-tb
+spec:
+  params:
+    - name: webhook-payload
+      value: $(extensions.marshalled-body)
+    - name: tekton-base-url
+      value: "http://tekton.sh1-x.com"

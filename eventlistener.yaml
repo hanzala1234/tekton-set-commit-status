@@ -1,0 +1,17 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: set-commit-status-el
+spec:
+  serviceAccountName: tekton-triggers-example-sa
+  triggers:
+    - name: set-commit-status
+      interceptors:
+        - cel:
+            overlays:
+              - key: marshalled-body
+                expression: body.marshalJSON()
+      bindings:
+        - ref: set-commit-status-tb
+      template:
+        ref: set-commit-status-tt

@@ -1,0 +1,25 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: set-commit-status-tt
+spec:
+  params:
+    - name: webhook-payload
+      description: "Data from webhook request"
+      default: ""
+    - name: tekton-base-url
+      description: "Tekton URL"
+      default: ""
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1alpha1
+      kind: PipelineRun
+      metadata:
+        generateName: set-commit-status-run-
+      spec:
+        pipelineRef:
+          name: set-commit-status
+        params:
+        - name: webhook-payload
+          value: "$(tt.params.webhook-payload)"
+        - name: tekton-base-url
+          value: "$(tt.params.tekton-base-url)"
