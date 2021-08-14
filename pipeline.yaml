@@ -94,7 +94,7 @@ spec:
           if "head_commit" in webhook_payload.keys():
             git_revision = webhook_payload["head_commit"]["id"]
           api_prefix="/v3" if git_service_type == "integrated" else ""
-          git_url="https://api.github.com/{api_prefix}/repos/{owner_name}/{repo_name}/statuses/{revision}"
+          git_url="https://api.github.com%s/repos/{owner_name}/{repo_name}/statuses/{revision}" % api_prefix
           git_state_mapping = {
             "failed": "failure",
             "canceled": "error",
@@ -193,7 +193,6 @@ spec:
           # Default to github
           
           git_url = git_url.format(
-            api_prefix=api_prefix,
             owner_name=webhook_payload["repository"]["owner"]["name"],
             repo_name=webhook_payload["repository"]["name"],
             revision=git_revision
