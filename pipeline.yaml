@@ -103,7 +103,10 @@ spec:
           }
         
         elif git_service_type == "gitlab":
-          git_revision = webhook_payload["checkout_sha"]
+          if "checkout_sha" in webhook_payload.keys():
+            git_revision = webhook_payload["checkout_sha"]
+          elif "event_type" in webhook_payload.keys() and webhook_payload["event_type"] == "merge_request":
+            git_revision = webhook_payload["object_attributes"]["last_commit"]["id"]
           git_url="https://gitlab.com/api/v4/projects/{id}/statuses/{revision}"
           git_state_mapping = {
             "pending": "pending",
