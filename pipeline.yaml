@@ -35,11 +35,113 @@ spec:
       default: "" 
     - name: state
       default: ""
-    - name: description
+    - name: description   # hardcoded values for now, not sure what should go there
       default: "Test set commit status"
     - name: context
       default: "continuous-integration/tekton"
   steps:
+    - name: extract-data-from-webhook-request
+      image: python:alpine
+      script: |
+        #!/usr/local/bin/python3
+        import re
+        import sys
+        import json
+
+        ###### adapt common values to python syntax
+        false=False
+        true=True
+        null=None
+        ############
+
+        webhook_payload = $(params.webhook-payload)
+        data = {}
+
+        ### determine git provider
+        if "repository" in webhook_payload.keys() and "url" in webhook_payload["repository"].keys():
+          url = webhook_payload["repository"]["url"]
+          if re.search(r"https://(api.)?github.com.*", url):
+            data["git_provider"] = "github"
+          elif "git@gitlab.com" in url:
+            data["git_provider"] = "gitlab"
+        else:
+            print("Error parsing webhook request, missing 'repository' field.")
+            sys.exit(1)
+        
+
+        ### determine git url
+        if data["git_provider"] == "github":
+          # data["git_url"] = "https://api.github.com%s/repos/{owner_name}/{repo_name}/statuses/{revision}"
+          data["git_url"] = "https://api.github.com/repos/{owner_name}/{repo_name}/statuses/{revision}"
+        elif data["git_provider"] == "gitlab":
+          data["git_url"] = "https://gitlab.com/api/v4/projects/{id}/statuses/{revision}"
+        
+
+        ### determine git revision
+        if data["git_provider"] == "github":
+          # push
+          if "after" in webhook_payload.keys():
+            data["git_revision"] = webhook_payload["after"]
+          # push to a new branch
+          elif "sha" in webhook_payload.keys():
+            data["git_revision"] = webhook_payload["sha"]
+          # pull request
+          elif "pull_request" in webhook_payload.keys() and "base" in webhook_payload["pull_request"].keys() and "sha" in webhook_payload["pull_request"]["base"].keys():
+            data["git_revision"] = webhook_payload["pull_request"]["base"]["sha"]
+          else:
+            print("Error parsing webhook request, missing git revision.")
+            sys.exit(1)
+        elif data["git_provider"] == "gitlab":
+          # push / push to a new branch
+          if "after" in webhook_payload.keys():
+            data["git_revision"] = webhook_payload["after"]
+          # merge request
+          elif "object_attributes" in webhook_payload.keys() and "last_commit" in webhook_payload["object_attributes"].keys():
+            data["git_revision"] = webhook_payload["object_attributes"]["last_commit"]["id"]
+          else:
+            print("Error parsing webhook request, missing git revision.")
+            sys.exit(1)
+
+
+        ### determine possible states
+        if data["git_provider"] == "github":
+          data["state"] = {
+            "failed": "failure",
+            "canceled": "error",
+            "running": "pending",
+            "success": "success"
+          }
+        elif data["git_provider"] == "gitlab":
+          data["state"] = {
+            "pending": "pending",
+            "running": "running",
+            "success": "success",
+            "failed": "failed",
+            "canceled": "canceled"
+          }
+        elif data["git_provider"] == "bitbucket":
+          data["state"] = {
+            "pending": "INPROGRESS",
+            "running": "INPROGRESS",
+            "success": "SUCCESSFUL",
+            "failed": "FAILED",
+            "canceled": "STOPPED"
+          }
+
+
+        ### provider specific data
+        if data["git_provider"] == "github":
+          [ data["git_owner_name"], data["git_repository_name"] ] = webhook_payload["repository"]["full_name"].split("/")
+        elif data["git_provider"] == "gitlab":
+          data["git_project_id"] = webhook_payload["project"]["id"]
+
+        
+        print("Data extracted successfully:", data)
+
+        with open('/workspace/git_data', 'w') as file:
+          file.write(json.dumps(data))
+
+
     - name: set-commit-status
       image: python:alpine
       env:
@@ -50,6 +152,7 @@ spec:
             secretKeyRef:
               name: git-token
               key: token
+        
       script: |
         #!/usr/local/bin/python3
         import json
@@ -58,79 +161,17 @@ spec:
         import urllib.request
         import urllib.parse
 
-        ###### adapt common values to python syntax
-        false=False
-        true=True
-        null=None
-        ############
+        data = {}
+        with open('/workspace/git_data','r') as file:
+          data = eval(file.read())
 
-
-
-        ########## params variables ##########
-        description = "$(params.description)"
-        context = "$(params.context)"
         target_url = "$(params.tekton_url)/#/namespaces/$(params.pipeline_namespace)/pipelineruns/$(params.pipeline_name)"        
-        webhook_payload = $(params.webhook-payload)
-
-        ########## git variables ##########
-        git_revision = ""
-        git_service_type = ""
-        git_url = ""
-        git_token = ""
-        git_state_mapping = {}
-        
-        ########## determine git_service_type ##########
-        url = webhook_payload["repository"]["url"]
-        if "https://github.com" in url:
-          git_service_type = "github"
-        elif "git@gitlab.com" in url:
-          git_service_type = "gitlab"
-        ################################################
-
-        git_token=json.loads(os.environ["GIT_TOKEN"])[git_service_type]
-
-
-        if git_service_type == "github":
-          if "head_commit" in webhook_payload.keys():
-            git_revision = webhook_payload["head_commit"]["id"]
-          api_prefix="/v3" if git_service_type == "integrated" else ""
-          git_url="https://api.github.com%s/repos/{owner_name}/{repo_name}/statuses/{revision}" % api_prefix
-          git_state_mapping = {
-            "failed": "failure",
-            "canceled": "error",
-            "running": "pending",
-            "success": "success"
-          }
-        
-        elif git_service_type == "gitlab":
-          if "checkout_sha" in webhook_payload.keys():
-            git_revision = webhook_payload["checkout_sha"]
-          elif "event_type" in webhook_payload.keys() and webhook_payload["event_type"] == "merge_request":
-            git_revision = webhook_payload["object_attributes"]["last_commit"]["id"]
-          git_url="https://gitlab.com/api/v4/projects/{id}/statuses/{revision}"
-          git_state_mapping = {
-            "pending": "pending",
-            "running": "running",
-            "success": "success",
-            "failed": "failed",
-            "canceled": "canceled"
-          }
-        
-        elif git_service_type == "bitbucket":
-          git_revision = ""
-          git_state_mapping = {
-            "pending": "INPROGRESS",
-            "running": "INPROGRESS",
-            "success": "SUCCESSFUL",
-            "failed": "FAILED",
-            "canceled": "STOPPED"
-          }
-        
+        git_token=json.loads(os.environ["GIT_TOKEN"])[data["git_provider"]]
 
         # get status from previous step or as param
         state = "$(params.state)"
         if state == "":
-          state = "failed"
+          state = "success"
 
         # If state is one of PipelineRun Taks execution status convert it to a generic state one
         if state == "Succeeded":
@@ -140,23 +181,47 @@ spec:
         elif state == "None":
           state = "pending"
 
-        
-
-
         # Create the request object according to the Git Flavor API
-        if state in git_state_mapping.keys():
-          state = git_state_mapping[state]
+        if state in data["state"].keys():
+          state = data["state"][state]
 
-        if git_service_type == "gitlab":
-          git_url = git_url.format(
-            id=webhook_payload["project"]["id"],
-            revision=git_revision
+
+        git_url = ""
+        if data["git_provider"] == "github":
+
+          git_url = data["git_url"].format(
+            owner_name=data["git_owner_name"],
+            repo_name=data["git_repository_name"],
+            revision=data["git_revision"]
+          )
+
+          request_body = {
+            "state": state,
+            "target_url": target_url,
+            "description": "$(params.description)",
+            "context": "$(params.context)"
+          }
+          
+          req = urllib.request.Request(
+            git_url,
+            data=json.dumps(request_body).encode('utf8'),
+            headers={
+                "content-type": "application/json",
+                "Authorization": "Bearer %s" % git_token
+            },
+            method="POST"
+          )
+
+        elif data["git_provider"] == "gitlab":
+          git_url = data["git_url"].format(
+            id=data["git_project_id"],
+            revision=data["git_revision"]
           )
           
           params = {
             "state": state,
-            "description": description,
-            "context": context,
+            "description": "$(params.description)",
+            "context": "$(params.context)",
             "target_url": target_url
           }
           
@@ -170,47 +235,23 @@ spec:
             method="POST"
           )
 
-        elif git_service_type == "bitbucketgit":
-          git_url = git_url.format()
+        # TODO: bitbucket
+        elif data["git_provider"] == "bitbucket":
+          sys.exit(1)
+          git_url = data["git_url"].format()
           # status_url = status_url + "/2.0/repositories/%s/%s/commit/%s/statuses/build" % (webhook_payload["repository"]["owner"]["id"], webhook_payload["repository"]["name"], revision)          
           
-          data = {
-            "key": os.environ["PIPELINE_ID"],
+          request_body = {
+            "key": "$(params.pipeline_name)",
             "url": target_url,
             "state": state,
-            "name": context,
-            "description": description
+            "name": "$(params.context)",
+            "description": "$(params.description)"
           }
           
           req = urllib.request.Request(
             git_url,
-            data=json.dumps(data).encode('utf8'),
-            headers={
-                "content-type": "application/json",
-                "Authorization": "Bearer %s" % git_token
-            },
-            method="POST"
-          )
-
-        else:
-          # Default to github
-          
-          git_url = git_url.format(
-            owner_name=webhook_payload["repository"]["owner"]["name"],
-            repo_name=webhook_payload["repository"]["name"],
-            revision=git_revision
-          )
-
-          data = {
-            "state": state,
-            "target_url": target_url,
-            "description": description,
-            "context": context
-          }
-          
-          req = urllib.request.Request(
-            git_url,
-            data=json.dumps(data).encode('utf8'),
+            data=json.dumps(request_body).encode('utf8'),
             headers={
                 "content-type": "application/json",
                 "Authorization": "Bearer %s" % git_token
@@ -228,4 +269,7 @@ spec:
             if os.environ["PIPELINE_DEBUG"] == "1":
               print("Status: %d" % (resp.status))
               print(resp.read())
-            sys.exit(0) 
+            for key, value in data["state"].items():
+              if value==state and key=="success":
+                sys.exit(0)
+            sys.exit(1) 

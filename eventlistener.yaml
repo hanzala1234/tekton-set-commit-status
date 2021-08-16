@@ -8,9 +8,17 @@ spec:
     - name: set-commit-status
       interceptors:
         - cel:
+            # limit to github and gitlab push/merge for now
+            filter: >-
+              (header.match('X-GitHub-Event', 'pull_request') && body.action in ['opened', 'reopened']) ||
+              header.match('X-GitHub-Event', 'push') ||
+              header.match('X-Gitlab-Event', 'Merge Request Hook') || header.match('X-Gitlab-Event', 'Push Hook')
             overlays:
               - key: marshalled-body
                 expression: body.marshalJSON()
+              # used for checking header
+              # - key: marshalled-header
+              #   expression: header.marshalJSON()
       bindings:
         - ref: set-commit-status-tb
       template:

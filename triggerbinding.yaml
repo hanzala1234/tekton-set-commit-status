@@ -4,7 +4,10 @@ metadata:
   name: set-commit-status-tb
 spec:
   params:
+    # used for checking header
+    # - name: webhook-header
+    #   value: $(extensions.marshalled-header)
     - name: webhook-payload
       value: $(extensions.marshalled-body)
     - name: tekton-base-url
-      value: "http://tekton.sh1-x.com"
+      value: "http://tekton.sh1-x.com" # hardcoded value, can be read from config map or something else...
