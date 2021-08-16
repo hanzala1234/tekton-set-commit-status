@@ -12,7 +12,8 @@ spec:
             filter: >-
               (header.match('X-GitHub-Event', 'pull_request') && body.action in ['opened', 'reopened']) ||
               header.match('X-GitHub-Event', 'push') ||
-              header.match('X-Gitlab-Event', 'Merge Request Hook') || header.match('X-Gitlab-Event', 'Push Hook')
+              (header.match('X-Gitlab-Event', 'Merge Request Hook') && (body.changes == {} || body.object_attributes.action == "reopen")) ||
+              header.match('X-Gitlab-Event', 'Push Hook')
             overlays:
               - key: marshalled-body
                 expression: body.marshalJSON()
